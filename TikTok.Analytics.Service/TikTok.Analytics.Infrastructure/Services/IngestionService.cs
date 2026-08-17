@@ -13,6 +13,7 @@ public class IngestionService : IIngestionService
     private readonly ITikTokDisplayApiClient _displayClient;
     private readonly ITikTokBusinessApiClient _businessClient;
     private readonly IBigQueryRepository _repository;
+    private readonly ITikTokTokenResolver _tokenResolver;
     private readonly IMapper _mapper;
     private readonly TikTokIngestionOptions _options;
     private readonly ILogger<IngestionService> _logger;
@@ -21,6 +22,7 @@ public class IngestionService : IIngestionService
         ITikTokDisplayApiClient displayClient,
         ITikTokBusinessApiClient businessClient,
         IBigQueryRepository repository,
+        ITikTokTokenResolver tokenResolver,
         IMapper mapper,
         IOptions<TikTokIngestionOptions> options,
         ILogger<IngestionService> logger)
@@ -28,6 +30,7 @@ public class IngestionService : IIngestionService
         _displayClient = displayClient;
         _businessClient = businessClient;
         _repository = repository;
+        _tokenResolver = tokenResolver;
         _mapper = mapper;
         _options = options.Value;
         _logger = logger;
@@ -50,12 +53,38 @@ public class IngestionService : IIngestionService
 
             try
             {
-                await IngestUserProfileAsync(page, ct);
-                await IngestVideosAsync(page, effectiveStartDate, ct);
-                await IngestAccountMetricsAsync(page, effectiveStartDate, today, ct);
-                await IngestFollowerGrowthAsync(page, effectiveStartDate, today, ct);
-                await IngestDemographicsAsync(page, ct);
-                await IngestVideoAnalyticsAsync(page, ct);
+                // Display API credential comes from the OAuth store when the page has been
+                // authorized, falling back to configuration. Null means skip the Display
+                // half rather than call the API with an empty token.
+                var displayToken = await _tokenResolver.GetDisplayAccessTokenAsync(page, ct);
+
+                if (displayToken is not null)
+                {
+                    await IngestUserProfileAsync(page, displayToken, ct);
+                    await IngestVideosAsync(page, displayToken, effectiveStartDate, ct);
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Skipping profile and video ingestion for {PageName}: no Display API token available",
+                        page.PageName);
+                }
+
+                // Business API uses a separate authorization server, so these stay on the
+                // configured token until a Business OAuth flow exists.
+                if (!string.IsNullOrWhiteSpace(page.BusinessAccessToken))
+                {
+                    await IngestAccountMetricsAsync(page, effectiveStartDate, today, ct);
+                    await IngestFollowerGrowthAsync(page, effectiveStartDate, today, ct);
+                    await IngestDemographicsAsync(page, ct);
+                    await IngestVideoAnalyticsAsync(page, ct);
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Skipping Business API ingestion for {PageName}: BusinessAccessToken is not configured",
+                        page.PageName);
+                }
 
                 _logger.LogInformation("Completed ingestion for page: {PageName}", page.PageName);
             }
@@ -68,10 +97,10 @@ public class IngestionService : IIngestionService
         _logger.LogInformation("TikTok data ingestion completed");
     }
 
-    private async Task IngestUserProfileAsync(PageConfig page, CancellationToken ct)
+    private async Task IngestUserProfileAsync(PageConfig page, string displayToken, CancellationToken ct)
     {
         _logger.LogInformation("Ingesting user profile for {PageName}", page.PageName);
-        var response = await _displayClient.GetUserInfoAsync(page.DisplayAccessToken, ct);
+        var response = await _displayClient.GetUserInfoAsync(displayToken, ct);
 
         if (response.Data?.User == null)
         {
@@ -84,7 +113,7 @@ public class IngestionService : IIngestionService
         await _repository.InsertUserProfileAsync(profile, ct);
     }
 
-    private async Task IngestVideosAsync(PageConfig page, DateTime effectiveStartDate, CancellationToken ct)
+    private async Task IngestVideosAsync(PageConfig page, string displayToken, DateTime effectiveStartDate, CancellationToken ct)
     {
         _logger.LogInformation("Ingesting videos for {PageName} since {Since}", page.PageName, effectiveStartDate);
 
@@ -94,7 +123,7 @@ public class IngestionService : IIngestionService
 
         while (hasMore)
         {
-            var response = await _displayClient.GetVideoListAsync(page.DisplayAccessToken, cursor, 20, ct);
+            var response = await _displayClient.GetVideoListAsync(displayToken, cursor, 20, ct);
 
             if (response.Data?.Videos == null || response.Data.Videos.Count == 0)
                 break;

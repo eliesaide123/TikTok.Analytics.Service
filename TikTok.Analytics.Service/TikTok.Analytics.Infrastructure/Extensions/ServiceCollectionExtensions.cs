@@ -8,6 +8,7 @@ using TikTok.Analytics.Infrastructure.BigQuery;
 using TikTok.Analytics.Infrastructure.Jobs;
 using TikTok.Analytics.Infrastructure.Logging;
 using TikTok.Analytics.Infrastructure.Services;
+using TikTok.Analytics.Infrastructure.Storage;
 
 namespace TikTok.Analytics.Infrastructure.Extensions;
 
@@ -17,20 +18,30 @@ public static class ServiceCollectionExtensions
     {
         // Configuration
         services.Configure<TikTokIngestionOptions>(configuration.GetSection(TikTokIngestionOptions.SectionName));
+        services.Configure<TikTokOAuthOptions>(configuration.GetSection(TikTokOAuthOptions.SectionName));
 
         // HTTP Clients
         services.AddHttpClient<ITikTokDisplayApiClient, TikTokDisplayApiClient>();
         services.AddHttpClient<ITikTokBusinessApiClient, TikTokBusinessApiClient>();
+        services.AddHttpClient<ITikTokOAuthClient, TikTokOAuthClient>();
 
         // Repositories
         services.AddSingleton<IBigQueryRepository, BigQueryRepository>();
 
+        // OAuth token + state storage.
+        // Singletons: the file store serialises writes through a static gate, and pending
+        // state values must outlive the request that issued them.
+        services.AddSingleton<ITikTokTokenStore, FileTikTokTokenStore>();
+        services.AddSingleton<IOAuthStateStore, InMemoryOAuthStateStore>();
+
         // Services
         services.AddScoped<IApiCallLogger, ApiCallLogger>();
+        services.AddScoped<ITikTokTokenResolver, TikTokTokenResolver>();
         services.AddScoped<IIngestionService, IngestionService>();
 
         // Quartz (background job scheduler)
         var ingestionOptions = configuration.GetSection(TikTokIngestionOptions.SectionName).Get<TikTokIngestionOptions>() ?? new TikTokIngestionOptions();
+        var oauthOptions = configuration.GetSection(TikTokOAuthOptions.SectionName).Get<TikTokOAuthOptions>() ?? new TikTokOAuthOptions();
 
         services.AddQuartz(q =>
         {
@@ -40,6 +51,14 @@ public static class ServiceCollectionExtensions
                 .ForJob(jobKey)
                 .WithIdentity("DailyIngestionTrigger")
                 .WithCronSchedule(ingestionOptions.CronSchedule));
+
+            // Access tokens live 24h, so this keeps them alive without user interaction.
+            var refreshJobKey = new JobKey("TokenRefreshJob");
+            q.AddJob<TokenRefreshJob>(opts => opts.WithIdentity(refreshJobKey));
+            q.AddTrigger(opts => opts
+                .ForJob(refreshJobKey)
+                .WithIdentity("TokenRefreshTrigger")
+                .WithCronSchedule(oauthOptions.RefreshCronSchedule));
         });
 
         services.AddQuartzHostedService(q => q.WaitForJobsToComplete = true);

@@ -47,3 +47,7 @@ Thumbs.db
 # Local Claude settings
 **/.claude/settings.local.json
 **/settings.local.json
+
+# TikTok OAuth token store — contains live access/refresh tokens
+tiktok-tokens.json
+tiktok-tokens.json.tmp
