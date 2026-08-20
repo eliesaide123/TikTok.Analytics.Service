@@ -6,10 +6,10 @@ namespace TikTok.Analytics.Infrastructure.Logging;
 
 public class ApiCallLogger : IApiCallLogger
 {
-    private readonly IBigQueryRepository _repository;
+    private readonly IAnalyticsRepository _repository;
     private readonly ILogger<ApiCallLogger> _logger;
 
-    public ApiCallLogger(IBigQueryRepository repository, ILogger<ApiCallLogger> logger)
+    public ApiCallLogger(IAnalyticsRepository repository, ILogger<ApiCallLogger> logger)
     {
         _repository = repository;
         _logger = logger;

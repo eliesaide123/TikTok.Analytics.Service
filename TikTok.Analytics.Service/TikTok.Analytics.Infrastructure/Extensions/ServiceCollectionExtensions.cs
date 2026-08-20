@@ -8,6 +8,7 @@ using TikTok.Analytics.Infrastructure.BigQuery;
 using TikTok.Analytics.Infrastructure.Jobs;
 using TikTok.Analytics.Infrastructure.Logging;
 using TikTok.Analytics.Infrastructure.Services;
+using TikTok.Analytics.Infrastructure.Sql;
 using TikTok.Analytics.Infrastructure.Storage;
 
 namespace TikTok.Analytics.Infrastructure.Extensions;
@@ -19,19 +20,29 @@ public static class ServiceCollectionExtensions
         // Configuration
         services.Configure<TikTokIngestionOptions>(configuration.GetSection(TikTokIngestionOptions.SectionName));
         services.Configure<TikTokOAuthOptions>(configuration.GetSection(TikTokOAuthOptions.SectionName));
+        services.Configure<TikTokBusinessOAuthOptions>(configuration.GetSection(TikTokBusinessOAuthOptions.SectionName));
 
         // HTTP Clients
         services.AddHttpClient<ITikTokDisplayApiClient, TikTokDisplayApiClient>();
         services.AddHttpClient<ITikTokBusinessApiClient, TikTokBusinessApiClient>();
         services.AddHttpClient<ITikTokOAuthClient, TikTokOAuthClient>();
+        services.AddHttpClient<ITikTokBusinessOAuthClient, TikTokBusinessOAuthClient>();
 
-        // Repositories
-        services.AddSingleton<IBigQueryRepository, BigQueryRepository>();
+        // Repositories. Storage is swappable so the same ingestion pipeline can write to a
+        // local SQL Server during development and BigQuery in the warehouse.
+        var storageProvider = configuration
+            .GetSection(TikTokIngestionOptions.SectionName)["StorageProvider"] ?? "SqlServer";
+
+        if (string.Equals(storageProvider, "BigQuery", StringComparison.OrdinalIgnoreCase))
+            services.AddSingleton<IAnalyticsRepository, BigQueryRepository>();
+        else
+            services.AddSingleton<IAnalyticsRepository, SqlServerAnalyticsRepository>();
 
         // OAuth token + state storage.
         // Singletons: the file store serialises writes through a static gate, and pending
         // state values must outlive the request that issued them.
         services.AddSingleton<ITikTokTokenStore, FileTikTokTokenStore>();
+        services.AddSingleton<IBusinessTokenStore, FileBusinessTokenStore>();
         services.AddSingleton<IOAuthStateStore, InMemoryOAuthStateStore>();
 
         // Services

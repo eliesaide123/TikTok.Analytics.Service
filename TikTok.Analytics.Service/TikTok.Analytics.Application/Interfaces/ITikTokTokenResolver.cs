@@ -2,6 +2,9 @@ using TikTok.Analytics.Application.Configuration;
 
 namespace TikTok.Analytics.Application.Interfaces;
 
+/// <summary>A resolved Business API credential: the token and the account it addresses.</summary>
+public record BusinessCredential(string AccessToken, string BusinessId);
+
 public interface ITikTokTokenResolver
 {
     /// <summary>
@@ -13,4 +16,13 @@ public interface ITikTokTokenResolver
     /// with an empty credential.
     /// </summary>
     Task<string?> GetDisplayAccessTokenAsync(PageConfig page, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns a usable Business API credential for the page, or null if none can be obtained.
+    ///
+    /// Same precedence as the Display side: the business token store wins, and the values
+    /// configured on the page remain a fallback so a manually issued token can be dropped
+    /// into appsettings for a first test before the OAuth flow is used.
+    /// </summary>
+    Task<BusinessCredential?> GetBusinessCredentialAsync(PageConfig page, CancellationToken ct = default);
 }

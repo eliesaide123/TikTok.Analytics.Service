@@ -7,7 +7,7 @@ using TikTok.Analytics.Domain.Entities;
 
 namespace TikTok.Analytics.Infrastructure.BigQuery;
 
-public class BigQueryRepository : IBigQueryRepository
+public class BigQueryRepository : IAnalyticsRepository
 {
     private readonly BigQueryClient _client;
     private readonly string _datasetId;

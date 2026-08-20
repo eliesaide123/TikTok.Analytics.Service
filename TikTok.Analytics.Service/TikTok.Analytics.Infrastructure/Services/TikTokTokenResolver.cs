@@ -14,17 +14,51 @@ namespace TikTok.Analytics.Infrastructure.Services;
 public class TikTokTokenResolver : ITikTokTokenResolver
 {
     private readonly ITikTokTokenStore _tokenStore;
+    private readonly IBusinessTokenStore _businessTokenStore;
     private readonly ITikTokOAuthClient _oauthClient;
     private readonly ILogger<TikTokTokenResolver> _logger;
 
     public TikTokTokenResolver(
         ITikTokTokenStore tokenStore,
+        IBusinessTokenStore businessTokenStore,
         ITikTokOAuthClient oauthClient,
         ILogger<TikTokTokenResolver> logger)
     {
         _tokenStore = tokenStore;
+        _businessTokenStore = businessTokenStore;
         _oauthClient = oauthClient;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Business credential for the page. The store wins when it holds one; the values on the
+    /// page config remain a fallback so a token issued by hand can be dropped into appsettings
+    /// for a first test before the OAuth flow has been used.
+    /// </summary>
+    public async Task<BusinessCredential?> GetBusinessCredentialAsync(PageConfig page, CancellationToken ct = default)
+    {
+        var stored = await _businessTokenStore.GetByPageAsync(page.PageId, ct);
+
+        if (stored is not null && !string.IsNullOrWhiteSpace(stored.BusinessId))
+        {
+            if (!stored.IsExpired(DateTime.UtcNow))
+                return new BusinessCredential(stored.AccessToken, stored.BusinessId);
+
+            // No refresh path yet: whether business tokens rotate depends on the granted
+            // product, and that is not known until a real authorization has been observed.
+            _logger.LogWarning(
+                "Page {PageId}: the stored business token expired on {ExpiredAt:u}. " +
+                "Re-authorize at /api/auth/tiktok/business/login?pageId={PageId}",
+                page.PageId, stored.ExpiresAtUtc);
+        }
+
+        if (!string.IsNullOrWhiteSpace(page.BusinessAccessToken) && !string.IsNullOrWhiteSpace(page.BusinessId))
+        {
+            _logger.LogInformation("Page {PageId}: using the BusinessAccessToken from configuration.", page.PageId);
+            return new BusinessCredential(page.BusinessAccessToken, page.BusinessId);
+        }
+
+        return null;
     }
 
     public async Task<string?> GetDisplayAccessTokenAsync(PageConfig page, CancellationToken ct = default)

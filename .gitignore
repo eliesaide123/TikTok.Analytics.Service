@@ -51,3 +51,5 @@ Thumbs.db
 # TikTok OAuth token store — contains live access/refresh tokens
 tiktok-tokens.json
 tiktok-tokens.json.tmp
+tiktok-business-tokens.json
+tiktok-business-tokens.json.tmp

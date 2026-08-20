@@ -2,7 +2,7 @@ using TikTok.Analytics.Domain.Entities;
 
 namespace TikTok.Analytics.Application.Interfaces;
 
-public interface IBigQueryRepository
+public interface IAnalyticsRepository
 {
     Task InsertUserProfileAsync(UserProfile profile, CancellationToken ct = default);
     Task InsertVideosAsync(IEnumerable<Video> videos, CancellationToken ct = default);

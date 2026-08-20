@@ -12,7 +12,7 @@ public class IngestionService : IIngestionService
 {
     private readonly ITikTokDisplayApiClient _displayClient;
     private readonly ITikTokBusinessApiClient _businessClient;
-    private readonly IBigQueryRepository _repository;
+    private readonly IAnalyticsRepository _repository;
     private readonly ITikTokTokenResolver _tokenResolver;
     private readonly IMapper _mapper;
     private readonly TikTokIngestionOptions _options;
@@ -21,7 +21,7 @@ public class IngestionService : IIngestionService
     public IngestionService(
         ITikTokDisplayApiClient displayClient,
         ITikTokBusinessApiClient businessClient,
-        IBigQueryRepository repository,
+        IAnalyticsRepository repository,
         ITikTokTokenResolver tokenResolver,
         IMapper mapper,
         IOptions<TikTokIngestionOptions> options,
@@ -70,20 +70,23 @@ public class IngestionService : IIngestionService
                         page.PageName);
                 }
 
-                // Business API uses a separate authorization server, so these stay on the
-                // configured token until a Business OAuth flow exists.
-                if (!string.IsNullOrWhiteSpace(page.BusinessAccessToken))
+                // Business API is a separate authorization server, so it carries its own
+                // credential. Null means skip rather than call with an empty token.
+                var business = await _tokenResolver.GetBusinessCredentialAsync(page, ct);
+
+                if (business is not null)
                 {
-                    await IngestAccountMetricsAsync(page, effectiveStartDate, today, ct);
-                    await IngestFollowerGrowthAsync(page, effectiveStartDate, today, ct);
-                    await IngestDemographicsAsync(page, ct);
-                    await IngestVideoAnalyticsAsync(page, ct);
+                    await IngestAccountMetricsAsync(page, business, effectiveStartDate, today, ct);
+                    await IngestFollowerGrowthAsync(page, business, effectiveStartDate, today, ct);
+                    await IngestDemographicsAsync(page, business, ct);
+                    await IngestVideoAnalyticsAsync(page, business, ct);
                 }
                 else
                 {
                     _logger.LogWarning(
-                        "Skipping Business API ingestion for {PageName}: BusinessAccessToken is not configured",
-                        page.PageName);
+                        "Skipping Business API ingestion for {PageName}: no business credential available. " +
+                        "Authorize at /api/auth/tiktok/business/login?pageId={PageId}",
+                        page.PageName, page.PageId);
                 }
 
                 _logger.LogInformation("Completed ingestion for page: {PageName}", page.PageName);
@@ -153,10 +156,10 @@ public class IngestionService : IIngestionService
         }
     }
 
-    private async Task IngestAccountMetricsAsync(PageConfig page, DateTime startDate, DateTime endDate, CancellationToken ct)
+    private async Task IngestAccountMetricsAsync(PageConfig page, BusinessCredential business, DateTime startDate, DateTime endDate, CancellationToken ct)
     {
         _logger.LogInformation("Ingesting account metrics for {PageName}", page.PageName);
-        var response = await _businessClient.GetAccountMetricsAsync(page.BusinessAccessToken, page.BusinessId, startDate, endDate, ct);
+        var response = await _businessClient.GetAccountMetricsAsync(business.AccessToken, business.BusinessId, startDate, endDate, ct);
 
         if (response.Data == null)
         {
@@ -166,15 +169,15 @@ public class IngestionService : IIngestionService
 
         var metrics = _mapper.Map<AccountMetrics>(response.Data);
         metrics.PageId = page.PageId;
-        metrics.BusinessId = page.BusinessId;
+        metrics.BusinessId = business.BusinessId;
         metrics.MetricDate = endDate;
         await _repository.InsertAccountMetricsAsync(metrics, ct);
     }
 
-    private async Task IngestFollowerGrowthAsync(PageConfig page, DateTime startDate, DateTime endDate, CancellationToken ct)
+    private async Task IngestFollowerGrowthAsync(PageConfig page, BusinessCredential business, DateTime startDate, DateTime endDate, CancellationToken ct)
     {
         _logger.LogInformation("Ingesting follower growth for {PageName}", page.PageName);
-        var response = await _businessClient.GetFollowerGrowthAsync(page.BusinessAccessToken, page.BusinessId, startDate, endDate, ct);
+        var response = await _businessClient.GetFollowerGrowthAsync(business.AccessToken, business.BusinessId, startDate, endDate, ct);
 
         if (response.Data == null)
         {
@@ -184,15 +187,15 @@ public class IngestionService : IIngestionService
 
         var growth = _mapper.Map<FollowerGrowth>(response.Data);
         growth.PageId = page.PageId;
-        growth.BusinessId = page.BusinessId;
+        growth.BusinessId = business.BusinessId;
         growth.MetricDate = endDate;
         await _repository.InsertFollowerGrowthAsync(growth, ct);
     }
 
-    private async Task IngestDemographicsAsync(PageConfig page, CancellationToken ct)
+    private async Task IngestDemographicsAsync(PageConfig page, BusinessCredential business, CancellationToken ct)
     {
         _logger.LogInformation("Ingesting demographics for {PageName}", page.PageName);
-        var response = await _businessClient.GetAudienceDemographicsAsync(page.BusinessAccessToken, page.BusinessId, ct);
+        var response = await _businessClient.GetAudienceDemographicsAsync(business.AccessToken, business.BusinessId, ct);
 
         if (response.Data == null)
         {
@@ -204,19 +207,19 @@ public class IngestionService : IIngestionService
         var today = DateTime.UtcNow.Date;
 
         foreach (var g in response.Data.AudienceGenders)
-            demographics.Add(new AudienceDemographic { PageId = page.PageId, BusinessId = page.BusinessId, SnapshotDate = today, SegmentType = "gender", SegmentValue = g.Name, Percentage = g.Percentage });
+            demographics.Add(new AudienceDemographic { PageId = page.PageId, BusinessId = business.BusinessId, SnapshotDate = today, SegmentType = "gender", SegmentValue = g.Name, Percentage = g.Percentage });
 
         foreach (var a in response.Data.AudienceAges)
-            demographics.Add(new AudienceDemographic { PageId = page.PageId, BusinessId = page.BusinessId, SnapshotDate = today, SegmentType = "age", SegmentValue = a.Name, Percentage = a.Percentage });
+            demographics.Add(new AudienceDemographic { PageId = page.PageId, BusinessId = business.BusinessId, SnapshotDate = today, SegmentType = "age", SegmentValue = a.Name, Percentage = a.Percentage });
 
         foreach (var c in response.Data.AudienceCountries)
-            demographics.Add(new AudienceDemographic { PageId = page.PageId, BusinessId = page.BusinessId, SnapshotDate = today, SegmentType = "country", SegmentValue = c.Name, Percentage = c.Percentage });
+            demographics.Add(new AudienceDemographic { PageId = page.PageId, BusinessId = business.BusinessId, SnapshotDate = today, SegmentType = "country", SegmentValue = c.Name, Percentage = c.Percentage });
 
         if (demographics.Count > 0)
             await _repository.InsertAudienceDemographicsAsync(demographics, ct);
     }
 
-    private async Task IngestVideoAnalyticsAsync(PageConfig page, CancellationToken ct)
+    private async Task IngestVideoAnalyticsAsync(PageConfig page, BusinessCredential business, CancellationToken ct)
     {
         _logger.LogInformation("Ingesting video analytics for {PageName}", page.PageName);
 
@@ -228,7 +231,7 @@ public class IngestionService : IIngestionService
 
         while (hasMore)
         {
-            var response = await _businessClient.GetVideoAnalyticsAsync(page.BusinessAccessToken, page.BusinessId, cursor, ct);
+            var response = await _businessClient.GetVideoAnalyticsAsync(business.AccessToken, business.BusinessId, cursor, ct);
 
             if (response.Data?.Videos == null || response.Data.Videos.Count == 0)
                 break;
